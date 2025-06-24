@@ -24,32 +24,130 @@ def download_stock_price_data(tickers, start_date, end_date):
 
     return df_prices, df_price_changes
 
+######## Signal Helper Function ############################
 
+def combine_two_subsignals(signal1, signal2):
+    
+    signal1 = np.asarray(signal1)
+    signal2 = np.asarray(signal2)
+    assert signal1.shape == signal2.shape
+
+    combined = np.zeros_like(signal1)
+    holding = 0
+
+    for i in range(len(signal1)):
+        if holding == 0 and (signal1[i] == 1 or signal2[i] == 1):
+            holding = 1
+        elif holding == 1 and signal1[i] == 0 and signal2[i] == 0:
+            holding = 0
+        combined[i] = holding
+
+    return combined
+
+###########################################################
+
+
+
+######## Signal 01 ##################################################
 
 def moving_average(prices, window_length):
     return np.convolve(prices, np.ones(window_length)/window_length, mode='same')
 
-
-
 def ma_signal(series, short_window, long_window):
-    # Init
-    signals = pd.DataFrame(index = series.index)
-    signals['signal'] = 0.0
-    
-    # Compute simple moving average
-    signals['short_ma'] = moving_average(series, short_window)
-    signals['long_ma'] = moving_average(series, long_window)
+    signals = pd.DataFrame(index=series.index)
+    signals['MA_signal'] = 0.0
 
-    #print(signals)
-    
-    # Compute signals 
-    signals.iloc[short_window:, signals.columns.get_loc('signal')] = np.where(
-        signals.iloc[short_window:, signals.columns.get_loc('short_ma')] > signals.iloc[short_window:, signals.columns.get_loc('long_ma')] , 1.0, 0.0)   
-    signals['position_change'] = signals['signal'].diff()
+    prices_array = series.to_numpy()
+    signals['short_ma'] = moving_average(prices_array, short_window)
+    signals['long_ma'] = moving_average(prices_array, long_window)
+
+    valid_range = max(short_window, long_window)
+    signals.iloc[valid_range:, signals.columns.get_loc('MA_signal')] = np.where(
+        signals.iloc[valid_range:, signals.columns.get_loc('short_ma')] >
+        signals.iloc[valid_range:, signals.columns.get_loc('long_ma')],
+        1.0, 0.0)
+
+    signals['position_change'] = signals['MA_signal'].diff()
     signals.loc[series.index[0], 'position_change'] = 0
+
+    return signals['MA_signal'], signals
+
+
+#Helper function exponentail moving avaerage
+def exponential_moving_average(prices, MACD_window_length):
+
+    ema = np.empty(len(prices))
+    ema[:] = np.nan  # Fill with NaNs
+
+    alpha = 2 / (MACD_window_length + 1)
+
+    # Find first non-NaN index
+    first_index = np.where(~np.isnan(prices))[0][0]
+
+    start = first_index + MACD_window_length - 1
+
+    if start < len(prices):
+        # Compute initial average manually
+        initial_sum = 0
+        count = 0
+        for i in range(start - MACD_window_length + 1, start + 1):
+            if not np.isnan(prices[i]):
+                initial_sum += prices[i]
+                count += 1
+        initial_avg = initial_sum / count
+        ema[start] = initial_avg
+
+        # Compute EMA recursively
+        for i in range(start + 1, len(prices)):
+            if not np.isnan(prices[i]):
+                ema[i] = alpha * prices[i] + (1 - alpha) * ema[i - 1]
+
+    return ema
+
+
+def signal_macd(prices, short_window, long_window, signal_window):
+    signals = pd.DataFrame(index=prices.index)
+    signals['signal'] = 0.0
+
+    price_array = prices.to_numpy()
+    signals['short_ema'] = exponential_moving_average(price_array, short_window)
+    signals['long_ema'] = exponential_moving_average(price_array, long_window)
+
+    signals['MACD'] = signals['short_ema'] - signals['long_ema']
+    signals['signal_line'] = exponential_moving_average(signals['MACD'].to_numpy(), signal_window)
+
+    #Generate signal where MACD > signal line
+    valid_range = max(short_window, long_window)
+    signals.loc[signals.index[valid_range:], 'signal'] = np.where(
+        signals['MACD'][valid_range:] > signals['signal_line'][valid_range:], 1.0, 0.0
+    )
+
+    signals['position_change'] = signals['signal'].diff()
+    signals.loc[prices.index[0], 'position_change'] = 0
+
+    return signals['signal'], signals
+
+def signal01(prices, short_ma, long_ma, short_macd, long_macd, signal_window_macd):
+
+    #MA Signal
+    ma_sig, _ = ma_signal(prices, short_ma, long_ma)
+
+    #MACD Signal
+    macd_sig, _ = signal_macd(prices, short_macd, long_macd, signal_window_macd)
+
+    #Combine Signals
+    combined = combine_two_subsignals(ma_sig, macd_sig)
+
+    #Return combined signal dataframe
+    signals = pd.DataFrame(index=prices.index)
+    signals['signal'] = combined
+    signals['position_change'] = signals['signal'].diff().fillna(0)
+
     return signals
 
+#######################################################################
 
+#######################################################################
 def simulate_single_stock_trading(df_position_changes, df_price_changes, df_prices, initial_cash=1.0, capital_fraction_per_trade=0.2):
 
     def open_trade(position, signal):
@@ -90,47 +188,111 @@ def simulate_single_stock_trading(df_position_changes, df_price_changes, df_pric
     return df_position
 
 
+######### Optimizers ###################################################################
 
-def gridsearch_best_ma_params(df_prices, df_price_changes, short_range, long_range):
-    
-    best_ret = -np.inf
-    params = []
-    returns = []
-    
-    for short_window in short_range:
-        for long_window in long_range:
-            if short_window >= long_window:
-                continue
-            
-            #Get signals and position changes
-            signals = ma_signal(df_prices, short_window, long_window)
-            df_position_changes = signals['position_change'].to_frame()
-            
-            #Run Simulation
-            df_position = simulate_single_stock_trading(df_position_changes, df_price_changes, df_prices, capital_fraction_per_trade=1)
-                      
-            #Compute return based on signals
-            ret = compute_total_trading_return(df_position)
-            returns.append(ret)
-            params.append((short_window, long_window))
-            
-            if ret > best_ret:
-                best_ret = ret
-                best_params = (short_window, long_window)
-                best_position = df_position
-    
-    combinations_df = pd.DataFrame({'params': params,'return': returns})
-                
-    return best_params, best_ret, best_position, combinations_df
+def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
+    keys = list(param_grid.keys())
+    shapes = [len(param_grid[k]) for k in keys]
+    total_combos = np.prod(shapes)
+
+    all_params = []
+    for i in range(total_combos):
+        idxs = []
+        rem = i
+        for s in reversed(shapes):
+            idxs.append(rem % s)
+            rem //= s
+        idxs = idxs[::-1]
+        combo = {keys[j]: param_grid[keys[j]][idxs[j]] for j in range(len(keys))}
+        all_params.append(combo)
+
+    best_score = -np.inf
+    best_params = None
+    best_metrics = None
+    results = []
+
+    for param in all_params:
+        signal = signal_fn(price, **param)
+        cumret, sharpe_val, max_dd, volatility = backtest_strategy(price, signal)
+
+        if metric == 'sharpe':
+            score = sharpe_val
+        elif metric == 'cumret':
+            score = cumret
+        elif metric == 'max_dd':
+            score = -max_dd  # lower is better
+        elif metric == 'volatility':
+            score = -volatility  # lower is better
+        else:
+            raise ValueError("Unsupported metric.")
+
+        results.append((param, score))
+
+        if score > best_score:
+            best_score = score
+            best_params = param
+            best_metrics = (cumret, sharpe_val, max_dd, volatility)
+
+    return best_params, best_score, best_metrics, results
+
+######################################################################################
 
 
+###### Measures function ###########################
 
 def compute_total_trading_return(df_position, initial_cash=1.0):
     final_value = df_position.iloc[-1]['stock_value'] + df_position.iloc[-1]['cash'] #Trade all leftover cash
     return (final_value - initial_cash) / initial_cash
 
+def returns(prices, positions):
+    prices_array = prices.to_numpy()
+    daily_returns = (prices_array[1:] / prices_array[:-1]) - 1
+    strategy_returns = positions[:-1] * daily_returns
+    return strategy_returns
 
-############ Benchmark functions ################################################
+def mean_return(returns):
+    return np.sum(returns)/len(returns)
+
+def std_deviation(returns):
+    mean = mean_return(returns)
+    return np.sqrt(np.sum((returns-mean)**2)/len(returns))
+
+def sharpe(returns, periods_per_year=252):
+    mean = mean_return(returns)
+    std  = std_deviation(returns) 
+    sharpe_ratio = (mean * periods_per_year) / (std * np.sqrt(periods_per_year))
+    return sharpe_ratio
+
+def cumulative_return(returns):
+    return np.prod(1 + returns) - 1
+
+def max_drawdown(returns):
+    cum_returns = np.cumprod(1 + returns)
+    peak = np.maximum.accumulate(cum_returns)
+    drawdown = 1 - cum_returns / peak
+    return np.max(drawdown)
+
+def volatility(returns):
+    return np.sqrt(np.sum((returns-np.mean(returns))**2) / len(returns))
+
+#####################################################
+
+
+####### Backtesting ##############################
+
+def backtest_strategy(price, signal):
+    position = signal.shift(1).fillna(0).to_numpy()
+    strat_returns = returns(price, position)
+    cumret = cumulative_return(strat_returns)
+    sharpe_val = sharpe(strat_returns)
+    max_dd = max_drawdown(strat_returns)
+    volatility = std_deviation(strat_returns)
+    return cumret, sharpe_val, max_dd, volatility
+
+##################################################
+
+
+############ Benchmark functions #################
 
 def buy_and_hold_return(df_prices):
     return (df_prices['AAPL'].iloc[-1] - df_prices['AAPL'].iloc[0]) / df_prices['AAPL'].iloc[0]
@@ -143,7 +305,6 @@ def random_trading_return(df_prices, df_price_changes):
     df_position = simulate_single_stock_trading(df_random_position_change, df_price_changes, df_prices, capital_fraction_per_trade=1)    
     
     return compute_total_trading_return(df_position, initial_cash=1.0)
-
 
 ###############################################################################
 
