@@ -147,6 +147,137 @@ def signal01(prices, short_ma, long_ma, short_macd, long_macd, signal_window_mac
 
 #######################################################################
 
+############# Signal 02 ##############################################
+
+
+def compute_rsi(prices, window_length):
+    
+    prices = np.asarray(prices).flatten()
+    deltas = np.diff(prices)
+    
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+    
+    #Initilize and don't compute the first window_length days avg gain and loss
+    avg_gain = np.empty_like(prices, dtype=float)
+    avg_loss = np.empty_like(prices, dtype=float)    
+    avg_gain[:window_length] = np.nan
+    avg_loss[:window_length] = np.nan
+    
+    #First average gain and loss (simple mean)
+    avg_gain[window_length] = gains[:window_length].mean()
+    avg_loss[window_length] = losses[:window_length].mean()
+    
+    #Implement the Wilder smoothing after the first mean computation
+    for i in range(window_length + 1, len(prices)):
+        avg_gain[i] = (avg_gain[i - 1] * (window_length - 1) + gains[i - 1]) / window_length
+        avg_loss[i] = (avg_loss[i - 1] * (window_length - 1) + losses[i - 1]) / window_length
+    
+    #Compute index
+    rs =  avg_gain / (avg_loss + 1e-10)
+    rsi = 100 - (100 / (1 + rs))
+    
+    #Let the first window_length entries be nan, so it doens't generate any signal
+    rsi[:window_length] = 50
+    
+    return rsi
+
+
+def signal_rsi(prices, rsi_window, lower_rsi_bound, upper_rsi_bound):
+    signals = pd.DataFrame(index=prices.index)
+    signals['signal'] = 0.0
+
+    # Calculate RSI (you need to have this function defined)
+    rsi = compute_rsi(prices, rsi_window)
+    signals['RSI'] = rsi
+
+    # Generate signal: 1 if RSI < lower bound, else 0
+    signals['signal'] = np.where(
+        np.isnan(rsi), 0.0,
+        np.where(rsi < lower_rsi_bound, 1.0, 0.0)
+    )
+
+    # Position change: track buy entries/exits
+    signals['position_change'] = signals['signal'].diff().fillna(0)
+    signals.loc[prices.index[0], 'position_change'] = 0
+
+    return signals['signal'], signals
+
+def compute_bollinger_bands(prices, window_length=20, num_std=2):
+    sma = moving_average(prices, window_length)
+    
+    # Calculate rolling std (using a simple moving window, numpy only)
+    stds = np.empty_like(prices)
+    half_w = window_length // 2
+    
+    for i in range(len(prices)):
+        start = max(0, i - half_w)
+        end = min(len(prices), i + half_w + 1)
+        stds[i] = np.std(prices[start:end])
+    
+    upper_band = sma + num_std * stds
+    lower_band = sma - num_std * stds
+    
+    return sma, upper_band, lower_band
+
+def signal_bollinger(prices, bollinger_window_length=20, num_std=2, persistence=3):
+    signals = pd.DataFrame(index=prices.index)
+    signals['signal'] = 0.0
+
+    prices_array = prices.to_numpy()
+    sma, upper_band, lower_band = compute_bollinger_bands(
+        prices_array, window_length=bollinger_window_length, num_std=num_std)
+
+    # Check if prices cross back inside lower band
+    outside_lower = prices_array < lower_band
+    outside_lower_prev = np.roll(outside_lower, 1)
+    outside_lower_prev[0] = False
+    buy_signal = (outside_lower_prev == True) & (outside_lower == False)
+
+    # Check if prices cross back inside upper band
+    outside_upper = prices_array > upper_band
+    outside_upper_prev = np.roll(outside_upper, 1)
+    outside_upper_prev[0] = False
+    sell_signal = (outside_upper_prev == False) & (outside_upper == True)
+
+    # Initialize position logic
+    position = np.zeros(len(prices_array), dtype=float)
+    holding = 0
+    for i in range(len(prices_array)):
+        if holding == 0 and buy_signal[i]:
+            holding = persistence
+        if holding > 0:
+            position[i] = 1.0
+            holding -= 1
+        if sell_signal[i]:
+            holding = 0
+
+    # Store results
+    signals['signal'] = position
+    signals['position_change'] = signals['signal'].diff().fillna(0)
+    signals.loc[prices.index[0], 'position_change'] = 0
+
+    return signals['signal'], signals
+
+
+def signal02(price, rsi_window_length, lower_rsi_bound, upper_rsi_bound, bollinger_window_length, bollinger_n_stds, persistance):
+
+    #RSI Signal
+    rsi_sig, _ = signal_rsi(prices, rsi_window_length, lower_rsi_bound, upper_rsi_bound)
+
+    #Bollinger Signal
+    bollinger_sig, _ = signal_bollinger(prices, bollinger_window_length, bollinger_n_stds, persistence=3)
+
+    #Combine Signals
+    combined = combine_two_subsignals(rsi_sig, bollinger_sig)
+
+    #Return combined signal dataframe
+    signals = pd.DataFrame(index=prices.index)
+    signals['signal'] = combined
+    signals['position_change'] = signals['signal'].diff().fillna(0)
+
+    return signals
+    
 #######################################################################
 def simulate_single_stock_trading(df_position_changes, df_price_changes, df_prices, initial_cash=1.0, capital_fraction_per_trade=0.2):
 
