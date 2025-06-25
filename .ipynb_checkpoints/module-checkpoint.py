@@ -184,22 +184,29 @@ def compute_rsi(prices, window_length):
 
 
 def signal_rsi(prices, rsi_window, lower_rsi_bound, upper_rsi_bound):
+    
     signals = pd.DataFrame(index=prices.index)
     signals['signal'] = 0.0
 
-    # Calculate RSI (you need to have this function defined)
+    pricnes_array = np.as_array(prices)
     rsi = compute_rsi(prices, rsi_window)
-    signals['RSI'] = rsi
+    
+    buy_signal = price_array < lower_rsi_bound
+    sell_signal = price_array > upper_rsi_bound
 
-    # Generate signal: 1 if RSI < lower bound, else 0
-    signals['signal'] = np.where(
-        np.isnan(rsi), 0.0,
-        np.where(rsi < lower_rsi_bound, 1.0, 0.0)
-    )
+    #Create position signal with holding logic
+    position = np.zeros(len(price_array), dtype=float)
+    holding = 0
+    for i in range(len(prices)):
+        if holding == 0 and buy_signal[i]:
+            holding = 1
+        elif holding == 1 and sell_signal[i]:
+            holding = 0
+        position[i] = holding
 
-    # Position change: track buy entries/exits
+    signals['signal'] = position
     signals['position_change'] = signals['signal'].diff().fillna(0)
-    signals.loc[prices.index[0], 'position_change'] = 0
+    signals.iloc[0, signals.columns.get_loc('position_change')] = 0
 
     return signals['signal'], signals
 
