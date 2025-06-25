@@ -46,9 +46,7 @@ def combine_two_subsignals(signal1, signal2):
 
 ###########################################################
 
-
-
-######## Signal 01 ##################################################
+######## Signal 01 ########################################
 
 def moving_average(prices, window_length):
     return np.convolve(prices, np.ones(window_length)/window_length, mode='same')
@@ -149,7 +147,6 @@ def signal01(prices, short_ma, long_ma, short_macd, long_macd, signal_window_mac
 
 ############# Signal 02 ##############################################
 
-
 def compute_rsi(prices, window_length):
     
     prices = np.asarray(prices).flatten()
@@ -187,15 +184,14 @@ def signal_rsi(prices, rsi_window, lower_rsi_bound, upper_rsi_bound):
     
     signals = pd.DataFrame(index=prices.index)
     signals['signal'] = 0.0
-
-    pricnes_array = np.as_array(prices)
+    
     rsi = compute_rsi(prices, rsi_window)
     
-    buy_signal = price_array < lower_rsi_bound
-    sell_signal = price_array > upper_rsi_bound
+    buy_signal = rsi < lower_rsi_bound
+    sell_signal = rsi > upper_rsi_bound
 
     #Create position signal with holding logic
-    position = np.zeros(len(price_array), dtype=float)
+    position = np.zeros(len(prices), dtype=int)
     holding = 0
     for i in range(len(prices)):
         if holding == 0 and buy_signal[i]:
@@ -227,7 +223,7 @@ def compute_bollinger_bands(prices, window_length=20, num_std=2):
     
     return sma, upper_band, lower_band
 
-def signal_bollinger(prices, bollinger_window_length=20, num_std=2, persistence=3):
+def signal_bollinger(prices, bollinger_window_length=20, num_std=2):
     signals = pd.DataFrame(index=prices.index)
     signals['signal'] = 0.0
 
@@ -247,17 +243,15 @@ def signal_bollinger(prices, bollinger_window_length=20, num_std=2, persistence=
     outside_upper_prev[0] = False
     sell_signal = (outside_upper_prev == False) & (outside_upper == True)
 
-    # Initialize position logic
-    position = np.zeros(len(prices_array), dtype=float)
+    #Create position signal with holding logic
+    position = np.zeros(len(prices), dtype=int)
     holding = 0
-    for i in range(len(prices_array)):
+    for i in range(len(prices)):
         if holding == 0 and buy_signal[i]:
-            holding = persistence
-        if holding > 0:
-            position[i] = 1.0
-            holding -= 1
-        if sell_signal[i]:
+            holding = 1
+        elif holding == 1 and sell_signal[i]:
             holding = 0
+        position[i] = holding
 
     # Store results
     signals['signal'] = position
@@ -267,13 +261,13 @@ def signal_bollinger(prices, bollinger_window_length=20, num_std=2, persistence=
     return signals['signal'], signals
 
 
-def signal02(price, rsi_window_length, lower_rsi_bound, upper_rsi_bound, bollinger_window_length, bollinger_n_stds, persistance):
+def signal02(prices, rsi_window_length, lower_rsi_bound, upper_rsi_bound, bollinger_window_length, bollinger_n_stds):
 
     #RSI Signal
     rsi_sig, _ = signal_rsi(prices, rsi_window_length, lower_rsi_bound, upper_rsi_bound)
 
     #Bollinger Signal
-    bollinger_sig, _ = signal_bollinger(prices, bollinger_window_length, bollinger_n_stds, persistence=3)
+    bollinger_sig, _ = signal_bollinger(prices, bollinger_window_length, bollinger_n_stds)
 
     #Combine Signals
     combined = combine_two_subsignals(rsi_sig, bollinger_sig)
@@ -284,8 +278,134 @@ def signal02(price, rsi_window_length, lower_rsi_bound, upper_rsi_bound, bolling
     signals['position_change'] = signals['signal'].diff().fillna(0)
 
     return signals
+
+###################################################################
+
+
+############### Signal 03 ##########################################
+
+def donchian_channel(prices, window_length=20):
     
-#######################################################################
+    #Initilize
+    prices = np.asarray(prices)
+    highs = np.full_like(prices, np.nan, dtype=float)
+    lows = np.full_like(prices, np.nan, dtype=float)
+    
+    for i in range(window_length - 1, len(prices)):
+        highs[i] = np.max(prices[i - window_length + 1:i + 1])
+        lows[i] = np.min(prices[i - window_length + 1:i + 1])
+    
+    return highs, lows
+
+def donchian_signals(prices, window_length=20):
+    
+    signals = pd.DataFrame(index=prices.index)
+    signals['signal'] = 0.0
+
+    price_array = prices.to_numpy()
+    highs, lows = donchian_channel(price_array, window_length)
+
+    # Entry and exit conditions
+    buy_signal = price_array > highs
+    sell_signal = price_array < lows
+
+    #Create position signal with holding logic
+    position = np.zeros(len(price_array), dtype=float)
+    holding = 0
+    for i in range(len(prices)):
+        if holding == 0 and buy_signal[i]:
+            holding = 1
+        elif holding == 1 and sell_signal[i]:
+            holding = 0
+        position[i] = holding
+
+    signals['signal'] = position
+    signals['position_change'] = signals['signal'].diff().fillna(0)
+    signals.iloc[0, signals.columns.get_loc('position_change')] = 0
+
+    return signals['signal'], signals
+
+def compute_adx(prices, window):
+
+    prices = np.asarray(prices)
+    
+    #Infer directional movement
+    dm_pos = []
+    dm_neg = []
+    for i in range(1, len(prices)):
+        price_diff = prices[i] - prices[i - 1]
+        if price_diff > 0:
+            dm_pos.append(price_diff)
+            dm_neg.append(0)
+        elif price_diff < 0:
+            dm_pos.append(0)
+            dm_neg.append(-price_diff)
+        else:
+            dm_pos.append(0)
+            dm_neg.append(0)
+
+    #Compute true ranges 
+    true_ranges = []
+    for i in range(1, len(prices)):
+        high_low = prices[i] - prices[i - 1]
+        high_close = abs(prices[i] - prices[i - 1])
+        low_close = abs(prices[i] - prices[i - 1])
+        true_ranges.append(max(high_low, high_close, low_close))
+
+    #Wilder's smoothing to create directional index
+    atr = [np.mean(true_ranges[:window])]
+    di_pos = [np.mean(dm_pos[:window])]
+    di_neg = [np.mean(dm_neg[:window])]   
+    for i in range(window, len(dm_pos)):
+        atr.append((atr[-1] * (window - 1) + true_ranges[i]) / window)
+        di_pos.append((di_pos[-1] * (window - 1) + dm_pos[i]) / window)
+        di_neg.append((di_neg[-1] * (window - 1) + dm_neg[i]) / window)
+    di_pos = np.array(di_pos)
+    di_neg = np.array(di_neg)   
+    dx = np.abs((di_pos - di_neg) / (di_pos + di_neg)) * 100
+
+    #Smooth DX to get ADX
+    adx = np.full(len(prices), 20.0) #Initalize with neutral priyes for the 2* windowlength warmup phase
+
+    #Smooth DX to get ADX
+    adx[window*2-1] = np.mean(dx[:window])
+    for i in range(window*2, len(dx)):
+        adx[i] = (adx[i - 1] * (window - 1) + dx[i]) / window
+        
+    return adx.flatten()
+
+def signal03(prices, adx_window_length, donchian_window_length):
+    
+    signals = pd.DataFrame(index=prices.index)
+    signals['signal'] = 0.0
+
+    adx = compute_adx(prices, adx_window_length)
+    donchian_sig, _ = donchian_signals(prices, donchian_window_length)
+    donchian_sig = np.asarray(donchian_sig)
+
+    #Custom tradig logic since adx only detects trends but not in which direction -> combine_two_subsignals() function doesn't work
+    position = np.zeros(len(prices), dtype=float)
+    holding = 0
+    for i in range(len(prices)):
+        if np.isnan(adx[i]):
+            continue
+        if holding == 0 and (donchian_sig[i] == 1 or adx[i] > 25):
+            holding = 1
+        elif holding == 1 and donchian_sig[i] == 0 and adx[i] > 25:
+            holding = 0
+        position[i] = holding
+
+    signals['signal'] = position
+    signals['position_change'] = signals['signal'].diff().fillna(0)
+    signals.iloc[0, signals.columns.get_loc('position_change')] = 0
+
+    return signals
+
+############################################################################
+
+
+######### Trading logic #####################################################
+
 def simulate_single_stock_trading(df_position_changes, df_price_changes, df_prices, initial_cash=1.0, capital_fraction_per_trade=0.2):
 
     def open_trade(position, signal):
@@ -326,7 +446,7 @@ def simulate_single_stock_trading(df_position_changes, df_price_changes, df_pric
     return df_position
 
 
-######### Optimizers ###################################################################
+######### Optimizers #####################################################
 
 def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
     keys = list(param_grid.keys())
@@ -373,10 +493,10 @@ def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
 
     return best_params, best_score, best_metrics, results
 
-######################################################################################
+#################################################################
 
 
-###### Measures function ###########################
+###### Measures function ########################################
 
 def compute_total_trading_return(df_position, initial_cash=1.0):
     final_value = df_position.iloc[-1]['stock_value'] + df_position.iloc[-1]['cash'] #Trade all leftover cash
@@ -416,7 +536,7 @@ def volatility(returns):
 #####################################################
 
 
-####### Backtesting ##############################
+####### Backtesting #################################
 
 def backtest_strategy(price, signal):
     position = signal.shift(1).fillna(0).to_numpy()
@@ -435,7 +555,6 @@ def backtest_strategy(price, signal):
 def buy_and_hold_return(df_prices):
     return (df_prices['AAPL'].iloc[-1] - df_prices['AAPL'].iloc[0]) / df_prices['AAPL'].iloc[0]
 
-
 def random_trading_return(df_prices, df_price_changes):
     np.random.seed(42)
     random_signals = np.random.choice([-1, 0, 1], size=len(df_prices), p=[0.1, 0.8, 0.1])
@@ -444,5 +563,5 @@ def random_trading_return(df_prices, df_price_changes):
     
     return compute_total_trading_return(df_position, initial_cash=1.0)
 
-###############################################################################
+###################################################
 
