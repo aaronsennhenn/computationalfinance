@@ -208,8 +208,7 @@ def signal_rsi(prices, rsi_window, lower_rsi_bound, upper_rsi_bound):
 
 def compute_bollinger_bands(prices, window_length=20, num_std=2):
     sma = moving_average(prices, window_length)
-    
-    # Calculate rolling std (using a simple moving window, numpy only)
+
     stds = np.empty_like(prices)
     half_w = window_length // 2
     
@@ -470,28 +469,37 @@ def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
     results = []
 
     for param in all_params:
-        signal = signal_fn(price, **param)
+        signals = signal_fn(price, **param)
+        signal = signals['signal']
         cumret, sharpe_val, max_dd, volatility = backtest_strategy(price, signal)
 
-        if metric == 'sharpe':
-            score = sharpe_val
-        elif metric == 'cumret':
-            score = cumret
-        elif metric == 'max_dd':
-            score = -max_dd  # lower is better
-        elif metric == 'volatility':
-            score = -volatility  # lower is better
-        else:
-            raise ValueError("Unsupported metric.")
+        result_row = {
+            **param,
+            'cumret': cumret,
+            'sharpe': sharpe_val,
+            'max_dd': max_dd,
+            'volatility': volatility
+        }
+        results.append(result_row)
 
-        results.append((param, score))
+    # Convert all results to DataFrame
+    df_results = pd.DataFrame(results)
 
-        if score > best_score:
-            best_score = score
-            best_params = param
-            best_metrics = (cumret, sharpe_val, max_dd, volatility)
+    # Sorting logic
+    ascending = True if metric in ['max_dd', 'volatility'] else False
+    df_sorted = df_results.sort_values(by=metric, ascending=ascending).reset_index(drop=True)
 
-    return best_params, best_score, best_metrics, results
+    best_row = df_sorted.iloc[0]
+    best_params = {k: best_row[k] for k in param_grid.keys()}
+    best_metrics = (
+        best_row['cumret'],
+        best_row['sharpe'],
+        best_row['max_dd'],
+        best_row['volatility']
+    )
+    best_score = best_row[metric]
+
+    return best_params, best_score, best_metrics, df_sorted
 
 #################################################################
 
