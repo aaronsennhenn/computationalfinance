@@ -49,6 +49,7 @@ def combine_two_subsignals(signal1, signal2):
 ######## Signal 01 ########################################
 
 def moving_average(prices, window_length):
+    window_length = int(window_length)
     return np.convolve(prices, np.ones(window_length)/window_length, mode='same')
 
 def ma_signal(series, short_window, long_window):
@@ -471,26 +472,23 @@ def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
     for param in all_params:
         signals = signal_fn(price, **param)
         signal = signals['signal']
-        cumret, sharpe_val, max_dd, volatility = backtest_strategy(price, signal)
-
+        metrics = backtest_strategy(price, signal)
         result_row = {
-            **param,
-            'cumret': cumret,
-            'sharpe': sharpe_val,
-            'max_dd': max_dd,
-            'volatility': volatility
+        **param,
+        'cumret': metrics['Strategy Cumulative Return'],
+        'sharpe': metrics['Strategy Sharpe'],
+        'max_dd': metrics['Strategy Max Drawdown'],
+        'volatility': metrics['Strategy Volatility']
         }
         results.append(result_row)
 
     # Convert all results to DataFrame
     df_results = pd.DataFrame(results)
-
-    # Sorting logic
     ascending = True if metric in ['max_dd', 'volatility'] else False
     df_sorted = df_results.sort_values(by=metric, ascending=ascending).reset_index(drop=True)
 
     best_row = df_sorted.iloc[0]
-    best_params = {k: best_row[k] for k in param_grid.keys()}
+    best_params = {k: int(best_row[k]) for k in param_grid.keys()}
     best_metrics = (
         best_row['cumret'],
         best_row['sharpe'],
@@ -503,73 +501,88 @@ def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
 
 #################################################################
 
+############### Metrics functions ###############################
 
-###### Measures function ########################################
-
-def compute_total_trading_return(df_position, initial_cash=1.0):
-    final_value = df_position.iloc[-1]['stock_value'] + df_position.iloc[-1]['cash'] #Trade all leftover cash
-    return (final_value - initial_cash) / initial_cash
-
-def returns(prices, positions):
-    prices_array = prices.to_numpy()
-    daily_returns = (prices_array[1:] / prices_array[:-1]) - 1
+def strategy_returns(prices, signals):
+    signals = np.asarray(signals)
+    positions = np.roll(signals, 1)
+    positions[0] = 0
+    prices = prices.to_numpy()
+    daily_returns = (prices[1:] / prices[:-1]) - 1
     strategy_returns = positions[:-1] * daily_returns
     return strategy_returns
-
-def mean_return(returns):
-    return np.sum(returns)/len(returns)
-
-def std_deviation(returns):
-    mean = mean_return(returns)
-    return np.sqrt(np.sum((returns-mean)**2)/len(returns))
-
-def sharpe(returns, periods_per_year=252):
-    mean = mean_return(returns)
-    std  = std_deviation(returns) 
-    sharpe_ratio = (mean * periods_per_year) / (std * np.sqrt(periods_per_year))
-    return sharpe_ratio
 
 def cumulative_return(returns):
     return np.prod(1 + returns) - 1
 
+def cumulative_return_series(returns):
+    return np.cumprod(1 + returns)
+
+def sharpe(returns, periods_per_year=252):
+    mean = np.mean(returns)
+    std = np.std(returns, ddof=1)
+    if std == 0:
+        return 0
+    return (mean / std) * np.sqrt(periods_per_year)
+
+def volatility(returns, periods_per_year=252):
+    return np.std(returns, ddof=1) * np.sqrt(periods_per_year)
+
 def max_drawdown(returns):
-    cum_returns = np.cumprod(1 + returns)
+    cum_returns = cumulative_return_series(returns)
     peak = np.maximum.accumulate(cum_returns)
     drawdown = 1 - cum_returns / peak
     return np.max(drawdown)
 
-def volatility(returns):
-    return np.sqrt(np.sum((returns-np.mean(returns))**2) / len(returns))
+def buy_and_hold_sharpe(prices, periods_per_year=252):    
+    prices = prices.to_numpy()
+    daily_returns = (prices[1:] / prices[:-1]) 
+    mean = np.mean(daily_returns)
+    std = np.std(daily_returns, ddof=1)
+    if std == 0:
+        return 0
+    return (mean / std) * np.sqrt(periods_per_year)
 
-#####################################################
 
+#################### Backtesting #################################    
 
-####### Backtesting #################################
+def backtest_strategy(prices, signals, periods_per_year=252):
 
-def backtest_strategy(price, signal):
-    position = signal.shift(1).fillna(0).to_numpy()
-    strat_returns = returns(price, position)
-    cumret = cumulative_return(strat_returns)
-    sharpe_val = sharpe(strat_returns)
-    max_dd = max_drawdown(strat_returns)
-    volatility = std_deviation(strat_returns)
-    return cumret, sharpe_val, max_dd, volatility
+    #Both returns
+    strat_returns = strategy_returns(prices, signals)
+    prices = prices.to_numpy()
+    bh_returns = prices[1:] / prices[:-1] - 1
+
+    #Cumulative return series
+    strat_cumret_series = cumulative_return_series(strat_returns)
+    bh_cumret_series = cumulative_return_series(bh_returns)
+
+    results = {
+        #Cumulative returns
+        'Strategy Cumulative Return': strat_cumret_series[-1] - 1,
+        'BuyHold Cumulative Return': bh_cumret_series[-1] - 1,
+
+        #Sharpe ratios
+        'Strategy Sharpe': sharpe(strat_returns, periods_per_year),
+        'BuyHold Sharpe': sharpe(bh_returns, periods_per_year),
+        'Sharpe Delta': sharpe(strat_returns, periods_per_year) - sharpe(bh_returns, periods_per_year),
+
+        #Max Drawdowns
+        'Strategy Max Drawdown': max_drawdown(strat_returns),
+        'BuyHold Max Drawdown': max_drawdown(bh_returns),
+
+        #Volatility
+        'Strategy Volatility': volatility(strat_returns, periods_per_year),
+        'BuyHold Volatility': volatility(bh_returns, periods_per_year),
+
+        #Return series for plotting
+        'Strategy Daily Returns': strat_returns,
+        'BuyHold Daily Returns': bh_returns,
+        'Strategy CumRet Series': strat_cumret_series,
+        'BuyHold CumRet Series': bh_cumret_series,
+    }
+
+    return results
 
 ##################################################
-
-
-############ Benchmark functions #################
-
-def buy_and_hold_return(df_prices):
-    return (df_prices['AAPL'].iloc[-1] - df_prices['AAPL'].iloc[0]) / df_prices['AAPL'].iloc[0]
-
-def random_trading_return(df_prices, df_price_changes):
-    np.random.seed(42)
-    random_signals = np.random.choice([-1, 0, 1], size=len(df_prices), p=[0.1, 0.8, 0.1])
-    df_random_position_change = pd.DataFrame(data=random_signals, index=df_prices.index, columns=['position_change']) #Random position changes
-    df_position = simulate_single_stock_trading(df_random_position_change, df_price_changes, df_prices, capital_fraction_per_trade=1)    
-    
-    return compute_total_trading_return(df_position, initial_cash=1.0)
-
-###################################################
 
