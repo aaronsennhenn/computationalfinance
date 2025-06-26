@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import matplotlib.pyplot as plt
 from pandas_datareader import data
 
 
@@ -207,7 +208,7 @@ def signal_rsi(prices, rsi_window, lower_rsi_bound, upper_rsi_bound):
 
     return signals['signal'], signals
 
-def compute_bollinger_bands(prices, window_length=20, num_std=2):
+def compute_bollinger_bands(prices, window_length, num_std):
     sma = moving_average(prices, window_length)
 
     stds = np.empty_like(prices)
@@ -223,7 +224,7 @@ def compute_bollinger_bands(prices, window_length=20, num_std=2):
     
     return sma, upper_band, lower_band
 
-def signal_bollinger(prices, bollinger_window_length=20, num_std=2):
+def signal_bollinger(prices, bollinger_window_length, num_std):
     signals = pd.DataFrame(index=prices.index)
     signals['signal'] = 0.0
 
@@ -291,9 +292,9 @@ def donchian_channel(prices, window_length=20):
     highs = np.full_like(prices, np.nan, dtype=float)
     lows = np.full_like(prices, np.nan, dtype=float)
     
-    for i in range(window_length - 1, len(prices)):
-        highs[i] = np.max(prices[i - window_length + 1:i + 1])
-        lows[i] = np.min(prices[i - window_length + 1:i + 1])
+    for i in range(window_length, len(prices)):
+        highs[i] = np.max(prices[i - window_length:i])  # exclude current
+        lows[i] = np.min(prices[i - window_length:i])
     
     return highs, lows
 
@@ -476,10 +477,9 @@ def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
         result_row = {
         **param,
         'cumret': metrics['Strategy Cumulative Return'],
+        'b&h cumret': metrics['BuyHold Cumulative Return'],
         'sharpe': metrics['Strategy Sharpe'],
-        'max_dd': metrics['Strategy Max Drawdown'],
-        'volatility': metrics['Strategy Volatility']
-        }
+        'b&h sharpe': metrics['BuyHold Sharpe']}
         results.append(result_row)
 
     # Convert all results to DataFrame
@@ -489,15 +489,9 @@ def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
 
     best_row = df_sorted.iloc[0]
     best_params = {k: int(best_row[k]) for k in param_grid.keys()}
-    best_metrics = (
-        best_row['cumret'],
-        best_row['sharpe'],
-        best_row['max_dd'],
-        best_row['volatility']
-    )
     best_score = best_row[metric]
 
-    return best_params, best_score, best_metrics, df_sorted
+    return best_params, best_score, df_sorted
 
 #################################################################
 
@@ -586,3 +580,26 @@ def backtest_strategy(prices, signals, periods_per_year=252):
 
 ##################################################
 
+####### Plotting #################################
+
+def plot_buy_and_sell_signals(signal_fn, prices, ticker, params):
+    prices = prices[ticker]
+    signals = signal_fn(prices, **params)
+
+    # Plot
+    plt.figure(figsize=(14, 6))
+    plt.plot(prices, label=f"{ticker} Price", color='black', alpha=0.8)
+
+    # Buy/Sell points
+    buy = signals['position_change'] == 1
+    sell = signals['position_change'] == -1
+    plt.plot(prices[buy], 'g^', label='Buy', markersize=10)
+    plt.plot(prices[sell], 'rv', label='Sell', markersize=10)
+
+    plt.title(f"{ticker} - Buy/Sell Signals from: {signal_fn.__name__}")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
