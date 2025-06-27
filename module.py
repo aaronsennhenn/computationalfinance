@@ -55,22 +55,22 @@ def moving_average(prices, window_length):
 
 def ma_signal(series, short_window, long_window):
     signals = pd.DataFrame(index=series.index)
-    signals['MA_signal'] = 0.0
+    signals['signal'] = 0.0
 
     prices_array = series.to_numpy()
     signals['short_ma'] = moving_average(prices_array, short_window)
     signals['long_ma'] = moving_average(prices_array, long_window)
 
     valid_range = max(short_window, long_window)
-    signals.iloc[valid_range:, signals.columns.get_loc('MA_signal')] = np.where(
+    signals.iloc[valid_range:, signals.columns.get_loc('signal')] = np.where(
         signals.iloc[valid_range:, signals.columns.get_loc('short_ma')] >
         signals.iloc[valid_range:, signals.columns.get_loc('long_ma')],
         1.0, 0.0)
 
-    signals['position_change'] = signals['MA_signal'].diff()
+    signals['position_change'] = signals['signal'].diff()
     signals.loc[series.index[0], 'position_change'] = 0
 
-    return signals['MA_signal'], signals
+    return signals
 
 
 #Helper function exponentail moving avaerage
@@ -125,23 +125,25 @@ def signal_macd(prices, short_window, long_window, signal_window):
     signals['position_change'] = signals['signal'].diff()
     signals.loc[prices.index[0], 'position_change'] = 0
 
-    return signals['signal'], signals
+    return signals
 
 def signal01(prices, short_ma, long_ma, short_macd, long_macd, signal_window_macd):
 
     #MA Signal
-    ma_sig, _ = ma_signal(prices, short_ma, long_ma)
+    ma_sig = ma_signal(prices, short_ma, long_ma)
 
     #MACD Signal
-    macd_sig, _ = signal_macd(prices, short_macd, long_macd, signal_window_macd)
+    macd_sig = signal_macd(prices, short_macd, long_macd, signal_window_macd)
 
     #Combine Signals
-    combined = combine_two_subsignals(ma_sig, macd_sig)
+    combined = combine_two_subsignals(ma_sig['signal'], macd_sig['signal'])
 
     #Return combined signal dataframe
     signals = pd.DataFrame(index=prices.index)
     signals['signal'] = combined
     signals['position_change'] = signals['signal'].diff().fillna(0)
+    signals['ma_position_change'] = ma_sig['position_change']
+    signals['macd_position_change'] = macd_sig['position_change']
 
     return signals
 
@@ -206,7 +208,7 @@ def signal_rsi(prices, rsi_window, lower_rsi_bound, upper_rsi_bound):
     signals['position_change'] = signals['signal'].diff().fillna(0)
     signals.iloc[0, signals.columns.get_loc('position_change')] = 0
 
-    return signals['signal'], signals
+    return signals
 
 def compute_bollinger_bands(prices, window_length, num_std):
     sma = moving_average(prices, window_length)
@@ -259,24 +261,26 @@ def signal_bollinger(prices, bollinger_window_length, num_std):
     signals['position_change'] = signals['signal'].diff().fillna(0)
     signals.loc[prices.index[0], 'position_change'] = 0
 
-    return signals['signal'], signals
+    return signals
 
 
 def signal02(prices, rsi_window_length, lower_rsi_bound, upper_rsi_bound, bollinger_window_length, bollinger_n_stds):
 
     #RSI Signal
-    rsi_sig, _ = signal_rsi(prices, rsi_window_length, lower_rsi_bound, upper_rsi_bound)
+    rsi_sig= signal_rsi(prices, rsi_window_length, lower_rsi_bound, upper_rsi_bound)
 
     #Bollinger Signal
-    bollinger_sig, _ = signal_bollinger(prices, bollinger_window_length, bollinger_n_stds)
+    bollinger_sig = signal_bollinger(prices, bollinger_window_length, bollinger_n_stds)
 
     #Combine Signals
-    combined = combine_two_subsignals(rsi_sig, bollinger_sig)
+    combined = combine_two_subsignals(rsi_sig['signal'], bollinger_sig['signal'])
 
     #Return combined signal dataframe
     signals = pd.DataFrame(index=prices.index)
     signals['signal'] = combined
     signals['position_change'] = signals['signal'].diff().fillna(0)
+    signals['rsi_position_change'] = rsi_sig['position_change']
+    signals['bollinger_position_change'] = bollinger_sig['position_change']
 
     return signals
 
@@ -324,7 +328,7 @@ def donchian_signals(prices, window_length=20):
     signals['position_change'] = signals['signal'].diff().fillna(0)
     signals.iloc[0, signals.columns.get_loc('position_change')] = 0
 
-    return signals['signal'], signals
+    return signals
 
 def compute_adx(prices, window):
 
@@ -381,8 +385,8 @@ def signal03(prices, adx_window_length, adx_threshhold, donchian_window_length):
     signals['signal'] = 0.0
 
     adx = compute_adx(prices, adx_window_length)
-    donchian_sig, _ = donchian_signals(prices, donchian_window_length)
-    donchian_sig = np.asarray(donchian_sig)
+    donchian_sig = donchian_signals(prices, donchian_window_length)
+    donchian_sig_array = np.asarray(donchian_sig['signal'])
 
     #Custom tradig logic since adx only detects trends but not in which direction -> combine_two_subsignals() function doesn't work
     position = np.zeros(len(prices), dtype=float)
@@ -390,14 +394,15 @@ def signal03(prices, adx_window_length, adx_threshhold, donchian_window_length):
     for i in range(len(prices)):
         if np.isnan(adx[i]):
             continue
-        if holding == 0 and donchian_sig[i] == 1 and adx[i] > adx_threshhold:
+        if holding == 0 and donchian_sig_array[i] == 1 and adx[i] > adx_threshhold:
             holding = 1
-        elif holding == 1 and donchian_sig[i] == 0 and adx[i] > adx_threshhold:
+        elif holding == 1 and donchian_sig_array[i] == 0 and adx[i] > adx_threshhold:
             holding = 0
         position[i] = holding
 
     signals['signal'] = position
     signals['position_change'] = signals['signal'].diff().fillna(0)
+    signals['donchian_position_change'] = donchian_sig['position_change']
     signals.iloc[0, signals.columns.get_loc('position_change')] = 0
 
     return signals
@@ -407,7 +412,7 @@ def signal03(prices, adx_window_length, adx_threshhold, donchian_window_length):
 
 ######### Trading logic #####################################################
 
-def simulate_single_stock_trading(df_position_changes, df_price_changes, df_prices, initial_cash=1.0, capital_fraction_per_trade=0.2):
+def simulate_single_stock_trading(df_position_changes, df_price_changes, df_prices, initial_cash=1.0, capital_fraction_per_trade=1):
 
     def open_trade(position, signal):
         stock_value, cash = position
@@ -497,9 +502,19 @@ def gridsearch_strategy(price, param_grid, signal_fn, metric='sharpe'):
 
 ############### Metrics functions ###############################
 
+
+
+def new_strategy_returns(prices, signals, capital_fraction_per_trade):
+    price_changes = prices.pct_change().fillna(0) +1
+    position_changes = signals
+    df_position = simulate_single_stock_trading(position_changes, price_changes, prices, capital_fraction_per_trade, initial_cash=1.0)
+    portfolio_values = df_position.sum(axis=1)  
+    total_return = (portfolio_values.iloc[-1] / portfolio_values.iloc[0]) - 1  
+    return total_return
+
 def strategy_returns(prices, signals):
-    signals = np.asarray(signals)
-    positions = np.roll(signals, 1)
+    positions = np.asarray(signals)
+    #positions = np.roll(signals, 1)
     positions[0] = 0
     prices = prices.to_numpy()
     daily_returns = (prices[1:] / prices[:-1]) - 1
@@ -542,6 +557,9 @@ def buy_and_hold_sharpe(prices, periods_per_year=252):
 
 def backtest_strategy(prices, signals, periods_per_year=252):
 
+    #New return function
+        
+
     #Both returns
     strat_returns = strategy_returns(prices, signals)
     prices = prices.to_numpy()
@@ -580,26 +598,27 @@ def backtest_strategy(prices, signals, periods_per_year=252):
 
 ##################################################
 
-####### Plotting #################################
+####### Plotting #################################  
+    
+def plot_buy_and_sell_signals(position_change, prices, ticker, sig_name):
 
-def plot_buy_and_sell_signals(signal_fn, prices, ticker, params):
-    prices = prices[ticker]
-    signals = signal_fn(prices, **params)
+    position_change = np.asarray(position_change)
+    dates = prices.index.to_numpy()
+    prices = np.asarray(prices[ticker])
 
-    # Plot
-    plt.figure(figsize=(14, 6))
-    plt.plot(prices, label=f"{ticker} Price", color='black', alpha=0.8)
+    #Plot
+    plt.figure(figsize=(15, 4))
+    plt.plot(dates, prices, label=f"{ticker} Price", color='black', alpha=0.8)
 
-    # Buy/Sell points
-    buy = signals['position_change'] == 1
-    sell = signals['position_change'] == -1
-    plt.plot(prices[buy], 'g^', label='Buy', markersize=7)
-    plt.plot(prices[sell], 'rv', label='Sell', markersize=7)
+    #Buy/Sell points
+    buy = position_change == 1
+    sell = position_change == -1
+    plt.plot(dates[buy], prices[buy], 'g^', label='Buy', markersize=8)
+    plt.plot(dates[sell], prices[sell], 'rv', label='Sell', markersize=8)
 
-    plt.title(f"{ticker} - Buy/Sell Signals from: {signal_fn.__name__}")
-    plt.xlabel("Date")
+    #Formatting
+    plt.title(f"{ticker} - Buy/Sell Signals from: {sig_name}")
     plt.ylabel("Price")
-    plt.legend()
     plt.grid(True)
     plt.tight_layout()
     plt.show()

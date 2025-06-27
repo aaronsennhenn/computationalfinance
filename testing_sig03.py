@@ -38,7 +38,7 @@ holding = 0
 for i in range(len(prices)):
    if np.isnan(adx[i]):
        continue
-   if holding == 0 and (donchian_sig[i] == 1 or adx[i] > 25):
+   if holding == 0 and (donchian_sig[i] == 1 and adx[i] > 25):
        holding = 1
    elif holding == 1 and donchian_sig[i] == 0 and adx[i] > 25:
        holding = 0
@@ -60,3 +60,17 @@ aaa = pd.DataFrame({
     'donchian': donchian_sig,
     'price': prices,
 })
+
+
+signals_df = signal01(prices, 50, 200, 12, 26, 9)
+
+
+plot_buy_and_sell_signals(signals_df['macd_position_change'], test_df_prices, 'AMD', 'MACD Signal')
+plot_buy_and_sell_signals_np(signals_df['macd_position_change'], test_df_prices, 'AMD', 'MACD Signal')
+
+
+strat_return = strategy_returns(prices, signals_df['signal'])
+cumulative_return(strat_return)
+
+new_strategy_returns(prices, signals_df['position_change'])
+
