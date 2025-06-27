@@ -366,7 +366,7 @@ def compute_adx(prices, window):
     dx = np.abs((di_pos - di_neg) / (di_pos + di_neg)) * 100
 
     #Smooth DX to get ADX
-    adx = np.full(len(prices), 20.0) #Initalize with neutral priyes for the 2* windowlength warmup phase
+    adx = np.full(len(prices), 1.0) #Initalize with neutral priyes for the 2* windowlength warmup phase
 
     #Smooth DX to get ADX
     adx[window*2-1] = np.mean(dx[:window])
@@ -375,7 +375,7 @@ def compute_adx(prices, window):
         
     return adx.flatten()
 
-def signal03(prices, adx_window_length, donchian_window_length):
+def signal03(prices, adx_window_length, adx_threshhold, donchian_window_length):
     
     signals = pd.DataFrame(index=prices.index)
     signals['signal'] = 0.0
@@ -390,9 +390,9 @@ def signal03(prices, adx_window_length, donchian_window_length):
     for i in range(len(prices)):
         if np.isnan(adx[i]):
             continue
-        if holding == 0 and (donchian_sig[i] == 1 or adx[i] > 25):
+        if holding == 0 and donchian_sig[i] == 1 and adx[i] > adx_threshhold:
             holding = 1
-        elif holding == 1 and donchian_sig[i] == 0 and adx[i] > 25:
+        elif holding == 1 and donchian_sig[i] == 0 and adx[i] > adx_threshhold:
             holding = 0
         position[i] = holding
 
@@ -593,8 +593,8 @@ def plot_buy_and_sell_signals(signal_fn, prices, ticker, params):
     # Buy/Sell points
     buy = signals['position_change'] == 1
     sell = signals['position_change'] == -1
-    plt.plot(prices[buy], 'g^', label='Buy', markersize=10)
-    plt.plot(prices[sell], 'rv', label='Sell', markersize=10)
+    plt.plot(prices[buy], 'g^', label='Buy', markersize=7)
+    plt.plot(prices[sell], 'rv', label='Sell', markersize=7)
 
     plt.title(f"{ticker} - Buy/Sell Signals from: {signal_fn.__name__}")
     plt.xlabel("Date")
