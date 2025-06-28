@@ -212,17 +212,14 @@ def signal_rsi(prices, rsi_window, lower_rsi_bound, upper_rsi_bound):
 
 def compute_bollinger_bands(prices, window_length, num_std):
     sma = moving_average(prices, window_length)
-
-    stds = np.empty_like(prices)
-    half_w = window_length // 2
     
-    for i in range(len(prices)):
-        start = max(0, i - half_w)
-        end = min(len(prices), i + half_w + 1)
-        stds[i] = np.std(prices[start:end])
+    std = np.full_like(prices, np.nan)
+    for i in range(window_length - 1, len(prices)):
+        window = prices[i - window_length + 1:i + 1]
+        std[i] = np.std(window, ddof=0)
     
-    upper_band = sma + num_std * stds
-    lower_band = sma - num_std * stds
+    upper_band = sma + num_std * std
+    lower_band = sma - num_std * std
     
     return sma, upper_band, lower_band
 

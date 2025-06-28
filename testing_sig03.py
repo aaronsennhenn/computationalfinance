@@ -72,5 +72,31 @@ plot_buy_and_sell_signals_np(signals_df['macd_position_change'], test_df_prices,
 strat_return = strategy_returns(prices, signals_df['signal'])
 cumulative_return(strat_return)
 
-new_strategy_returns(prices, signals_df['position_change'])
+df_pos, returns = new_strategy_returns(prices, signals_df[['position_change']])
 
+sma = moving_average(prices, window_length)
+
+ stds = np.empty_like(prices)
+    half_w = window_length // 2
+    
+    for i in range(len(prices)):
+        start = max(0, i - half_w)
+        end = min(len(prices), i + half_w + 1)
+        stds[i] = np.std(prices[start:end])
+    
+    upper_band = sma + num_std * stds
+    lower_band = sma - num_std * stds
+    
+    
+x = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
+
+y = moving_average(x, 2)
+y, x
+len(y)
+len(x)
+
+
+def moving_average(prices, window_length):
+    cumsum = np.cumsum(np.insert(prices, 0, 0)) 
+    result = (cumsum[window_length:] - cumsum[:-window_length]) / window_length
+    return np.concatenate((np.full(window_length - 1, np.nan), result))
